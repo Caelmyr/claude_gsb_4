@@ -441,39 +441,64 @@
         const API_BASE = '';
         let currentSessionId = null;
         let isProcessing = false;
+        // 消息加载请求令牌：每次切换会话递增，用于丢弃过期的异步响应
+        let messagesRequestId = 0;
+
+        // 空状态HTML
+        function emptyStateHTML() {
+            return `
+                <div class="empty-state">
+                    <div class="empty-icon">💬</div>
+                    <div>开始与知识图谱对话</div>
+                    <div style="font-size:13px;margin-top:10px;color:#666;">
+                        您可以询问关于文档中实体和关系的问题
+                    </div>
+                </div>
+            `;
+        }
 
         // 初始化
-        document.addEventListener('DOMContentLoaded', () => {
-            loadSessions();
-        });
+        document.addEventListener('DOMContentLoaded', init);
+
+        async function init() {
+            const sessions = await loadSessions();
+            // 重新打开页面时自动选中最近更新的会话，恢复聊天窗口内容
+            if (sessions && sessions.length > 0 && currentSessionId === null) {
+                await selectSession(sessions[0].id);
+            }
+        }
 
         // 加载会话列表
         async function loadSessions() {
             try {
                 const response = await fetch(`${API_BASE}/api/qa/sessions`);
                 const data = await response.json();
+                const sessions = data.sessions || [];
 
                 const list = document.getElementById('sessionList');
 
-                if (data.sessions.length === 0) {
+                if (sessions.length === 0) {
                     list.innerHTML = `
                         <div class="empty-state">
                             <div>暂无会话</div>
                             <div style="font-size:12px;margin-top:5px;">点击上方按钮创建新会话</div>
                         </div>
                     `;
-                    return;
+                    return sessions;
                 }
 
-                list.innerHTML = data.sessions.map(session => `
+                list.innerHTML = sessions.map(session => `
                     <div class="session-item ${session.id === currentSessionId ? 'active' : ''}"
                          onclick="selectSession('${session.id}')">
                         <div class="session-title">${session.title}</div>
                         <div class="session-meta">${session.message_count} 条消息 · ${formatDate(session.updated_at)}</div>
                     </div>
                 `).join('');
+
+                return sessions;
             } catch (error) {
                 console.error('加载会话失败:', error);
+                return [];
             }
         }
 
@@ -487,9 +512,12 @@
                 });
 
                 const data = await response.json();
+
+                // 作废正在加载中的旧会话消息，防止其响应晚到覆盖新会话窗口
+                messagesRequestId++;
                 currentSessionId = data.session_id;
 
-                loadSessions();
+                await loadSessions();
                 clearChat();
             } catch (error) {
                 console.error('创建会话失败:', error);
@@ -498,36 +526,46 @@
 
         // 选择会话
         async function selectSession(sessionId) {
+            // 已选中该会话时无需重复加载，避免竞态和不必要的请求
+            if (sessionId === currentSessionId) return;
+
             currentSessionId = sessionId;
+            // 先清空窗口并切换高亮，避免旧会话消息残留
+            clearChat();
             loadSessions();
             await loadSessionMessages(sessionId);
         }
 
         // 加载会话消息
         async function loadSessionMessages(sessionId) {
+            // 为本轮加载分配令牌；快速切换时，旧令牌的响应将被丢弃
+            const requestId = ++messagesRequestId;
+            const chatMessages = document.getElementById('chatMessages');
+
             try {
                 const response = await fetch(`${API_BASE}/api/qa/sessions/${sessionId}/messages`);
                 const data = await response.json();
 
-                const chatMessages = document.getElementById('chatMessages');
-
-                if (data.messages.length === 0) {
-                    chatMessages.innerHTML = `
-                        <div class="empty-state">
-                            <div class="empty-icon">💬</div>
-                            <div>开始与知识图谱对话</div>
-                            <div style="font-size:13px;margin-top:10px;color:#666;">
-                                您可以询问关于文档中实体和关系的问题
-                            </div>
-                        </div>
-                    `;
+                // 响应到达时用户已切换到其他会话（或又触发了新加载），丢弃过期响应
+                if (requestId !== messagesRequestId || sessionId !== currentSessionId) {
                     return;
                 }
 
-                chatMessages.innerHTML = data.messages.map(msg => createMessageHTML(msg)).join('');
+                const messages = (data.messages || []).slice();
+                // 按时间戳排序，保证不同来源/乱序返回的消息也能按时间正序展示
+                messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+                if (messages.length === 0) {
+                    chatMessages.innerHTML = emptyStateHTML();
+                    return;
+                }
+
+                chatMessages.innerHTML = messages.map(msg => createMessageHTML(msg)).join('');
                 scrollToBottom();
             } catch (error) {
-                console.error('加载消息失败:', error);
+                if (requestId === messagesRequestId && sessionId === currentSessionId) {
+                    console.error('加载消息失败:', error);
+                }
             }
         }
 
@@ -577,15 +615,7 @@
 
         // 清空聊天
         function clearChat() {
-            document.getElementById('chatMessages').innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">💬</div>
-                    <div>开始与知识图谱对话</div>
-                    <div style="font-size:13px;margin-top:10px;color:#666;">
-                        您可以询问关于文档中实体和关系的问题
-                    </div>
-                </div>
-            `;
+            document.getElementById('chatMessages').innerHTML = emptyStateHTML();
         }
 
         // 提问
@@ -599,6 +629,9 @@
             if (!currentSessionId) {
                 await createSession();
             }
+
+            // 记录本条消息所属会话，响应返回时必须仍处于该会话才可写入窗口
+            const askSessionId = currentSessionId;
 
             isProcessing = true;
             document.getElementById('sendBtn').disabled = true;
@@ -616,21 +649,23 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         question: question,
-                        session_id: currentSessionId
+                        session_id: askSessionId
                     })
                 });
 
                 const data = await response.json();
 
+                // 响应返回前用户已切换到其他会话：消息已由后端正确存入原会话，
+                // 不能把回复追加到当前窗口；若切回原会话则从后端重新加载完整记录
+                if (askSessionId !== currentSessionId) {
+                    return;
+                }
+
                 // 隐藏加载状态
                 hideTypingIndicator();
 
-                // 添加助手回复
-                addMessage('assistant', data.answer, {
-                    sources: data.sources,
-                    related_entities: data.related_entities,
-                    confidence: data.confidence
-                });
+                // 以服务端持久化的消息为准重新渲染，避免乐观追加导致重复或顺序错乱
+                await loadSessionMessages(askSessionId);
 
                 // 更新会话ID
                 if (data.session_id && !currentSessionId) {
@@ -639,8 +674,10 @@
 
                 loadSessions();
             } catch (error) {
-                hideTypingIndicator();
-                addMessage('assistant', '抱歉，处理您的问题时出现错误，请稍后重试。');
+                if (askSessionId === currentSessionId) {
+                    hideTypingIndicator();
+                    addMessage('assistant', '抱歉，处理您的问题时出现错误，请稍后重试。');
+                }
                 console.error('问答失败:', error);
             }
 
