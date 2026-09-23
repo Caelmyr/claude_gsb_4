@@ -10,10 +10,11 @@ from backend.graph.storage import GraphStorage
 class AnswerGenerator:
     """答案生成器"""
 
-    def __init__(self, storage: GraphStorage):
+    def __init__(self, storage: GraphStorage, dialogue_manager: DialogueManager = None):
         self.storage = storage
         self.retriever = SemanticRetriever(storage)
-        self.dialogue_manager = DialogueManager()
+        # 复用外部传入的会话管理器，避免多个实例内存状态不一致
+        self.dialogue_manager = dialogue_manager or DialogueManager()
 
     def generate_answer(self, question: str, session_id: str = None) -> Dict:
         """生成问题答案"""

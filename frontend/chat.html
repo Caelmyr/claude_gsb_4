@@ -441,6 +441,8 @@
         const API_BASE = '';
         let currentSessionId = null;
         let isProcessing = false;
+        // 会话消息加载请求序号，用于丢弃快速切换时的过期响应
+        let loadMessagesToken = 0;
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -479,6 +481,7 @@
 
         // 创建新会话
         async function createSession() {
+            if (isProcessing) return;
             try {
                 const response = await fetch(`${API_BASE}/api/qa/sessions`, {
                     method: 'POST',
@@ -488,6 +491,8 @@
 
                 const data = await response.json();
                 currentSessionId = data.session_id;
+                // 作废所有在途的旧会话消息请求
+                loadMessagesToken++;
 
                 loadSessions();
                 clearChat();
@@ -497,21 +502,32 @@
         }
 
         // 选择会话
-        async function selectSession(sessionId) {
+        function selectSession(sessionId) {
+            // 请求在途时禁止切换，避免助手回复追加到错误会话
+            if (isProcessing || sessionId === currentSessionId) return;
+
             currentSessionId = sessionId;
+            // 作废在途的消息加载响应，防止旧会话内容晚返回后覆盖新会话
+            const token = ++loadMessagesToken;
+
             loadSessions();
-            await loadSessionMessages(sessionId);
+            // 立即清空，避免切换间隙显示上一个会话的消息
+            clearChat();
+            loadSessionMessages(sessionId, token);
         }
 
         // 加载会话消息
-        async function loadSessionMessages(sessionId) {
+        async function loadSessionMessages(sessionId, token) {
             try {
                 const response = await fetch(`${API_BASE}/api/qa/sessions/${sessionId}/messages`);
                 const data = await response.json();
 
+                // 快速切换后，过期响应直接丢弃；会话已再次变化时也丢弃
+                if (token !== loadMessagesToken || sessionId !== currentSessionId) return;
+
                 const chatMessages = document.getElementById('chatMessages');
 
-                if (data.messages.length === 0) {
+                if (!data.messages || data.messages.length === 0) {
                     chatMessages.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-icon">💬</div>
@@ -524,7 +540,11 @@
                     return;
                 }
 
-                chatMessages.innerHTML = data.messages.map(msg => createMessageHTML(msg)).join('');
+                // 按时间戳升序渲染，避免存储/返回顺序异常导致时间线混乱
+                const messages = data.messages.slice().sort(
+                    (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
+                );
+                chatMessages.innerHTML = messages.map(msg => createMessageHTML(msg)).join('');
                 scrollToBottom();
             } catch (error) {
                 console.error('加载消息失败:', error);
@@ -598,7 +618,12 @@
             // 如果没有会话，先创建
             if (!currentSessionId) {
                 await createSession();
+                // 创建失败则中止
+                if (!currentSessionId) return;
             }
+
+            // 锁定本次提问所属会话，响应返回前切换逻辑已被 isProcessing 禁止
+            const askSessionId = currentSessionId;
 
             isProcessing = true;
             document.getElementById('sendBtn').disabled = true;
@@ -616,11 +641,18 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         question: question,
-                        session_id: currentSessionId
+                        session_id: askSessionId
                     })
                 });
 
+                if (!response.ok) {
+                    throw new Error(`服务器返回错误: ${response.status}`);
+                }
+
                 const data = await response.json();
+
+                // 仅当仍处于原会话时才渲染回复，杜绝跨会话消息混入
+                if (askSessionId !== currentSessionId) return;
 
                 // 隐藏加载状态
                 hideTypingIndicator();
@@ -639,8 +671,10 @@
 
                 loadSessions();
             } catch (error) {
-                hideTypingIndicator();
-                addMessage('assistant', '抱歉，处理您的问题时出现错误，请稍后重试。');
+                if (askSessionId === currentSessionId) {
+                    hideTypingIndicator();
+                    addMessage('assistant', '抱歉，处理您的问题时出现错误，请稍后重试。');
+                }
                 console.error('问答失败:', error);
             }
 

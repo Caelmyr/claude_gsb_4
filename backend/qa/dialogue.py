@@ -103,10 +103,10 @@ class DialogueManager:
         return self.sessions.get(session_id)
 
     def get_session_messages(self, session_id: str) -> List[Dict]:
-        """获取会话消息"""
+        """获取会话消息（按时间戳升序返回）"""
         session = self.sessions.get(session_id)
         if session:
-            return session['messages']
+            return sorted(session['messages'], key=lambda m: m.get('timestamp', ''))
         return []
 
     def get_recent_context(self, session_id: str, n_messages: int = 5) -> str:

@@ -25,8 +25,8 @@ nlp_pipeline = NLPPipeline()
 graph_builder = GraphBuilder()
 graph_storage = GraphStorage()
 graph_query = GraphQuery(graph_storage)
-answer_generator = AnswerGenerator(graph_storage)
 dialogue_manager = DialogueManager()
+answer_generator = AnswerGenerator(graph_storage, dialogue_manager)
 
 
 # ==================== 前端页面路由 ====================

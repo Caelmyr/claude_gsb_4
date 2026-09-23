@@ -1,0 +1,30 @@
+{
+  "id": "725b1e10",
+  "title": "会话 2026/9/23 13:31:19",
+  "created_at": "2026-09-23T13:31:19.056066",
+  "updated_at": "2026-09-23T13:31:25.403639",
+  "messages": [
+    {
+      "id": "74f9546e",
+      "role": "user",
+      "content": "你好2",
+      "timestamp": "2026-09-23T13:31:25.402559",
+      "metadata": {}
+    },
+    {
+      "id": "c5aea27d",
+      "role": "assistant",
+      "content": "抱歉，我没有找到相关信息来回答您的问题。请尝试换个方式提问，或者先上传相关文档。",
+      "timestamp": "2026-09-23T13:31:25.403629",
+      "metadata": {
+        "sources": [],
+        "confidence": 0.1
+      }
+    }
+  ],
+  "context": {
+    "entities": [],
+    "relations": [],
+    "topic": null
+  }
+}
